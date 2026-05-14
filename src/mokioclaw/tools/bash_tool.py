@@ -33,6 +33,14 @@ def _coerce_timeout(timeout_seconds: int | str | float) -> int:
 def _normalize_command(command: str) -> str:
     if os.name == "nt":
         normalized = re.sub(r"^\s*python3(\.exe)?\b", "python", command, count=1, flags=re.IGNORECASE)
+        normalized = re.sub(
+            r"^\s*cd\s+(?:/workspace|workspace|\.?/workspace|\.mokioclaw[\\/]+workspace)\s*(?:&&|&)\s*",
+            "",
+            normalized,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"^\s*pwd\s*$", "cd", normalized, count=1, flags=re.IGNORECASE)
         normalized = re.sub(r"\bls\s+-la\b", "dir", normalized)
         normalized = re.sub(r"\bls\b", "dir", normalized)
         normalized = re.sub(r"\bcat\s+([^\s|&<>]+)", r"type \1", normalized)
@@ -66,11 +74,38 @@ def _handle_tail_command(state: RuntimeState, command: str) -> dict[str, Any] | 
     }
 
 
+def _handle_workspace_query(state: RuntimeState, command: str) -> dict[str, Any] | None:
+    if not re.fullmatch(r"\s*(?:cd|pwd)\s*", command, flags=re.IGNORECASE):
+        return None
+    return {
+        "ok": True,
+        "timed_out": False,
+        "command": command.strip() or "cd",
+        "exit_code": 0,
+        "stdout": f"{state.workspace}\n",
+        "stderr": "",
+        "duration_ms": 0,
+    }
+
+
 def _looks_dangerous(command: str) -> str | None:
     for pattern in DANGEROUS_PATTERNS:
         if re.search(pattern, command, re.IGNORECASE):
             return pattern
     return None
+
+
+def _decode_output(output: bytes | str | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output
+    for encoding in ("utf-8", "gbk", "mbcs"):
+        try:
+            return output.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return output.decode("utf-8", errors="replace")
 
 
 def run_bash(state: RuntimeState, command: str, timeout_seconds: int | str | float = DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -82,6 +117,9 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: int | str | flo
     normalized_command = _normalize_command(command)
 
     handled = _handle_tail_command(state, normalized_command)
+    if handled is not None:
+        return handled
+    handled = _handle_workspace_query(state, normalized_command)
     if handled is not None:
         return handled
 
@@ -98,9 +136,6 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: int | str | flo
             normalized_command,
             cwd=state.workspace,
             shell=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             capture_output=True,
             timeout=timeout,
             env=env,
@@ -110,13 +145,13 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: int | str | flo
             "ok": False,
             "timed_out": True,
             "exit_code": None,
-            "stdout": (exc.stdout or "")[:MAX_OUTPUT_CHARS],
-            "stderr": (exc.stderr or "")[:MAX_OUTPUT_CHARS],
+            "stdout": _decode_output(exc.stdout)[:MAX_OUTPUT_CHARS],
+            "stderr": _decode_output(exc.stderr)[:MAX_OUTPUT_CHARS],
             "duration_ms": round((time.perf_counter() - started) * 1000),
         }
 
-    stdout = completed.stdout[:MAX_OUTPUT_CHARS]
-    stderr = completed.stderr[:MAX_OUTPUT_CHARS]
+    stdout = _decode_output(completed.stdout)[:MAX_OUTPUT_CHARS]
+    stderr = _decode_output(completed.stderr)[:MAX_OUTPUT_CHARS]
     return {
         "ok": completed.returncode == 0,
         "timed_out": False,

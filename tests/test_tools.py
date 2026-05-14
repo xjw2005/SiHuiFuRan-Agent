@@ -6,6 +6,7 @@ from mokioclaw.core.state import RuntimeState
 from mokioclaw.tools.bash_tool import run_bash
 from mokioclaw.tools.file_tools import edit_file, read_file, write_file
 from mokioclaw.tools.grep_tool import grep
+from mokioclaw.tools.todo_tool import update_todo, write_todos
 
 
 def make_state(tmp_path: Path) -> RuntimeState:
@@ -52,6 +53,16 @@ def test_write_file_creates_new_file(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["type"] == "create"
     assert (tmp_path / "hello.py").read_text(encoding="utf-8") == "print('hello')\n"
+
+
+def test_write_file_returns_error_for_path_outside_workspace(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = write_file(state, "../outside.py", "print('nope')\n")
+
+    assert result["ok"] is False
+    assert "inside workspace" in result["error"]
+    assert not (tmp_path.parent / "outside.py").exists()
 
 
 def test_write_file_requires_read_before_overwrite(tmp_path: Path) -> None:
@@ -135,6 +146,16 @@ def test_bash_supports_tail_file_on_windows_style_usage(tmp_path: Path) -> None:
     assert result["stdout"] == "2\n3\n"
 
 
+def test_bash_normalizes_workspace_cd_and_pwd(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(state, "cd /workspace && pwd", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert str(tmp_path) in result["stdout"]
+    assert result["command"] == "cd"
+
+
 def test_bash_blocks_dangerous_command(tmp_path: Path) -> None:
     state = make_state(tmp_path)
 
@@ -142,3 +163,47 @@ def test_bash_blocks_dangerous_command(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert "blocked" in result["error"]
+
+
+def test_todo_write_tool_records_plan_parts() -> None:
+    result = write_todos(
+        ["write tests", "implement"],
+        ["tests pass"],
+        ["python -m pytest -q"],
+    )
+
+    assert result["ok"] is True
+    assert result["todos"] == ["write tests", "implement"]
+    assert result["acceptance_criteria"] == ["tests pass"]
+    assert result["verification_commands"] == ["python -m pytest -q"]
+
+
+def test_todo_write_tool_normalizes_json_strings() -> None:
+    result = write_todos(
+        '[{"title": "write tests"}, {"title": "implement"}]',
+        "- tests pass\n- demo runs",
+        '["python -m pytest -q"]',
+    )
+
+    assert result["todos"] == ["write tests", "implement"]
+    assert result["acceptance_criteria"] == ["tests pass", "demo runs"]
+    assert result["verification_commands"] == ["python -m pytest -q"]
+
+
+def test_todo_update_tool_updates_existing_todo() -> None:
+    todos = [{"id": "todo-1", "content": "write tests", "status": "pending", "note": ""}]
+
+    result = update_todo(todos, "todo-1", "completed", "tests written")
+
+    assert result["ok"] is True
+    assert result["todos"][0]["status"] == "completed"
+    assert result["todos"][0]["note"] == "tests written"
+
+
+def test_todo_update_tool_rejects_unknown_todo() -> None:
+    todos = [{"id": "todo-1", "content": "write tests", "status": "pending", "note": ""}]
+
+    result = update_todo(todos, "todo-2", "completed")
+
+    assert result["ok"] is False
+    assert result["todos"][0]["status"] == "pending"
