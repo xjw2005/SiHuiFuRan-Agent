@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from mokioclaw.core.state import RuntimeState
-from mokioclaw.tools.bash_tool import run_bash
+from mokioclaw.tools.bash_tool import bash_tool_description, run_bash
 from mokioclaw.tools.file_tools import edit_file, read_file, write_file
 from mokioclaw.tools.grep_tool import grep
 from mokioclaw.tools.todo_tool import update_todo, write_todos
+from mokioclaw.tools.web_search_tool import web_search
 
 
 def make_state(tmp_path: Path) -> RuntimeState:
@@ -165,6 +166,33 @@ def test_bash_blocks_dangerous_command(tmp_path: Path) -> None:
     assert "blocked" in result["error"]
 
 
+def test_bash_tool_description_mentions_windows_cmd(monkeypatch) -> None:
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+
+    description = bash_tool_description()
+
+    assert "cmd.exe" in description
+    assert "Do not use POSIX-only tools" in description
+
+
+def test_bash_tool_description_mentions_posix_for_macos(monkeypatch) -> None:
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+
+    description = bash_tool_description()
+
+    assert "macOS" in description
+    assert "POSIX shell" in description
+
+
+def test_bash_tool_description_mentions_posix_for_linux(monkeypatch) -> None:
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+
+    description = bash_tool_description()
+
+    assert "Linux/Unix" in description
+    assert "POSIX shell" in description
+
+
 def test_todo_write_tool_records_plan_parts() -> None:
     result = write_todos(
         ["write tests", "implement"],
@@ -207,3 +235,41 @@ def test_todo_update_tool_rejects_unknown_todo() -> None:
 
     assert result["ok"] is False
     assert result["todos"][0]["status"] == "pending"
+
+
+def test_web_search_tool_requires_tavily_key(monkeypatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+
+    result = web_search("Amiya Arknights")
+
+    assert result["ok"] is False
+    assert "TAVILY_API_KEY" in result["error"]
+
+
+def test_web_search_tool_parses_tavily_results(monkeypatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def search(self, **kwargs):
+            return {
+                "answer": "Amiya is from Arknights.",
+                "results": [
+                    {
+                        "title": "Amiya",
+                        "url": "https://example.com/amiya",
+                        "content": "Amiya profile",
+                        "score": 0.9,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr("tavily.TavilyClient", FakeClient)
+
+    result = web_search("Amiya Arknights")
+
+    assert result["ok"] is True
+    assert result["answer"] == "Amiya is from Arknights."
+    assert result["results"][0]["url"] == "https://example.com/amiya"

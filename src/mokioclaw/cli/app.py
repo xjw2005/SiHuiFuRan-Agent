@@ -39,6 +39,6 @@ def main(
         safe_echo(ctx.get_help())
         raise typer.Exit()
 
-    safe_secho("mokioclaw stage 2: LangGraph planner -> actor -> verifier", fg=typer.colors.MAGENTA)
+    safe_secho("mokioclaw stage 4: MultiAgent + context compression", fg=typer.colors.MAGENTA)
     for event in stream_agent_events(task, workspace=workspace, max_attempts=max_attempts):
         print_event(event)
