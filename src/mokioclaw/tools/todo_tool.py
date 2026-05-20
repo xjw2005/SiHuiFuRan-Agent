@@ -20,8 +20,14 @@ def _normalize_items(items: Any) -> list[str]:
             return [line.strip("- ").strip() for line in stripped.splitlines() if line.strip()]
         return _normalize_items(decoded)
     if isinstance(items, dict):
-        value = items.get("content") or items.get("title") or items.get("text") or items.get("command")
-        return [str(value).strip()] if value else []
+        value = items.get("content") or items.get("description") or items.get("title") or items.get("text") or items.get("command")
+        if value:
+            return [str(value).strip()]
+        normalized: list[str] = []
+        for key, item in items.items():
+            child_items = _normalize_items(item)
+            normalized.extend(child_items or [str(key).strip()])
+        return [item for item in normalized if item]
     if isinstance(items, list):
         normalized: list[str] = []
         for item in items:

@@ -159,6 +159,24 @@ def test_bash_normalizes_workspace_cd_and_pwd(tmp_path: Path) -> None:
     assert result["command"] == "cd"
 
 
+def test_bash_allows_dev_null_stderr_redirect(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(state, "ls missing-file 2>/dev/null || echo File not found", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert "File not found" in result["stdout"]
+
+
+def test_bash_blocks_stdout_redirect_to_absolute_path(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(state, "echo nope > /tmp/mokioclaw-outside.txt", timeout_seconds=5)
+
+    assert result["ok"] is False
+    assert "blocked" in result["error"]
+
+
 def test_bash_blocks_dangerous_command(tmp_path: Path) -> None:
     state = make_state(tmp_path)
 
@@ -218,6 +236,19 @@ def test_todo_write_tool_normalizes_json_strings() -> None:
     assert result["todos"] == ["write tests", "implement"]
     assert result["acceptance_criteria"] == ["tests pass", "demo runs"]
     assert result["verification_commands"] == ["python -m pytest -q"]
+
+
+def test_todo_write_tool_accepts_id_keyed_description_dict() -> None:
+    result = write_todos(
+        '{"todo-1": {"status": "completed", "description": "Research Qwen"}, "todo-2": {"description": "Write HTML"}}',
+        '["HTML exists"]',
+        '["ls -la qwen.html"]',
+    )
+
+    assert result["ok"] is True
+    assert result["todos"] == ["Research Qwen", "Write HTML"]
+    assert result["acceptance_criteria"] == ["HTML exists"]
+    assert result["verification_commands"] == ["ls -la qwen.html"]
 
 
 def test_todo_update_tool_updates_existing_todo() -> None:
