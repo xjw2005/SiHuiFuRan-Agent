@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
+
+from mokioclaw.core.approval import ApprovalDecision, ApprovalRequest, normalize_approval_mode
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,11 @@ class FileSnapshot:
 class RuntimeState:
     workspace: Path
     read_files: dict[Path, FileSnapshot] = field(default_factory=dict)
+    approval_mode: str = "inline"
+    approval_handler: Callable[[ApprovalRequest], ApprovalDecision | bool] | None = None
+
+    def __post_init__(self) -> None:
+        self.approval_mode = normalize_approval_mode(self.approval_mode)
 
     def record_read(self, path: Path, *, complete: bool) -> None:
         stat = path.stat()

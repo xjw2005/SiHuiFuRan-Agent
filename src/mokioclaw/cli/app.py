@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
+from rich import box
+from rich.panel import Panel
 
 from mokioclaw.cli.formatter import print_event, safe_echo, safe_secho
+from mokioclaw.core.approval import ApprovalDecision, ApprovalRequest
 from mokioclaw.core.agent import stream_agent_events
 
 app = typer.Typer(help="mokioclaw: a teaching-first mini CodeAgent.")
@@ -31,6 +34,10 @@ def main(
         int,
         typer.Option("--max-attempts", help="Maximum planner/actor/verifier attempts before finalizing."),
     ] = 3,
+    approval_mode: Annotated[
+        Literal["inline", "auto", "deny"],
+        typer.Option("--approval-mode", help="Human approval mode for high-risk BashTool commands: inline, auto, or deny."),
+    ] = "inline",
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
@@ -40,5 +47,28 @@ def main(
         raise typer.Exit()
 
     safe_secho("mokioclaw stage 4: MultiAgent + context compression", fg=typer.colors.MAGENTA)
-    for event in stream_agent_events(task, workspace=workspace, max_attempts=max_attempts):
+    approval_handler = _inline_approval_handler if approval_mode == "inline" else None
+    for event in stream_agent_events(
+        task,
+        workspace=workspace,
+        max_attempts=max_attempts,
+        approval_mode=approval_mode,
+        approval_handler=approval_handler,
+    ):
         print_event(event)
+
+
+def _inline_approval_handler(request: ApprovalRequest) -> ApprovalDecision:
+    from mokioclaw.cli.formatter import console
+
+    console.print(
+        Panel(
+            f"Command:\n{request.command}\n\nRisk:\n{request.risk_reason}",
+            title=f"Human Approval · {request.tool_name}",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+    answer = typer.prompt("Approve? [y/N]", default="n", show_default=False).strip().lower()
+    approved = answer in {"y", "yes"}
+    return ApprovalDecision(approved=approved, reason="" if approved else "Rejected by human operator.")

@@ -8,10 +8,15 @@ from mokioclaw.core.state import RuntimeState
 from mokioclaw.graph.workflow import build_workflow
 
 
-def create_runtime(workspace: Path | None = None) -> RuntimeState:
+def create_runtime(
+    workspace: Path | None = None,
+    *,
+    approval_mode: str = "inline",
+    approval_handler=None,
+) -> RuntimeState:
     selected = workspace or default_workspace()
     selected.mkdir(parents=True, exist_ok=True)
-    return RuntimeState(workspace=selected)
+    return RuntimeState(workspace=selected, approval_mode=approval_mode, approval_handler=approval_handler)
 
 
 def stream_agent_events(
@@ -19,8 +24,10 @@ def stream_agent_events(
     *,
     workspace: Path | None = None,
     max_attempts: int = 3,
+    approval_mode: str = "inline",
+    approval_handler=None,
 ) -> Iterator[dict[str, Any]]:
-    state = create_runtime(workspace)
+    state = create_runtime(workspace, approval_mode=approval_mode, approval_handler=approval_handler)
     workflow = build_workflow()
     yield {"type": "workspace", "path": str(state.workspace)}
 

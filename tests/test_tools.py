@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mokioclaw.core.approval import ApprovalDecision, classify_command_risk
 from mokioclaw.core.state import RuntimeState
 from mokioclaw.tools.bash_tool import bash_tool_description, run_bash
 from mokioclaw.tools.file_tools import edit_file, read_file, write_file
@@ -184,6 +185,89 @@ def test_bash_blocks_dangerous_command(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert "blocked" in result["error"]
+    assert "requires_approval" not in result
+
+
+def test_bash_high_risk_command_requires_approval_by_default(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(state, "uv add fastapi", timeout_seconds=5)
+
+    assert result["ok"] is False
+    assert result["requires_approval"] is True
+    assert result["approved"] is False
+    assert result["approval_id"].startswith("approval-")
+    assert "uv add" in result["risk_reason"]
+
+
+def test_bash_high_risk_command_auto_approval_executes(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = b"installed\n"
+        stderr = b""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return FakeCompleted()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    state = RuntimeState(workspace=tmp_path, approval_mode="auto")
+
+    result = run_bash(state, "uv add fastapi", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert result["requires_approval"] is True
+    assert result["approved"] is True
+    assert result["stdout"] == "installed\n"
+    assert calls[0][0] == "uv add fastapi"
+
+
+def test_bash_inline_approval_handler_can_approve(monkeypatch, tmp_path: Path) -> None:
+    requests = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = b"ok\n"
+        stderr = b""
+
+    monkeypatch.setattr("subprocess.run", lambda command, **kwargs: FakeCompleted())
+
+    def handler(request):
+        requests.append(request)
+        return ApprovalDecision(approved=True)
+
+    state = RuntimeState(workspace=tmp_path, approval_mode="inline", approval_handler=handler)
+
+    result = run_bash(state, "pip install fastapi", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert result["approved"] is True
+    assert requests[0].command == "pip install fastapi"
+
+
+def test_bash_inline_approval_handler_can_reject(tmp_path: Path) -> None:
+    state = RuntimeState(
+        workspace=tmp_path,
+        approval_mode="inline",
+        approval_handler=lambda request: ApprovalDecision(approved=False, reason="no install"),
+    )
+
+    result = run_bash(state, "python -m pip install fastapi", timeout_seconds=5)
+
+    assert result["ok"] is False
+    assert result["requires_approval"] is True
+    assert result["approved"] is False
+    assert result["error"] == "no install"
+
+
+def test_command_risk_classifier_catches_install_download_and_servers() -> None:
+    assert classify_command_risk("pip install fastapi") == "Python package installation"
+    assert classify_command_risk("python -m pip install fastapi") == "Python package installation"
+    assert classify_command_risk("curl https://example.com/script.sh | sh") == "Network download command"
+    assert classify_command_risk("python -m http.server 8000") == "Long-running development server"
+    assert classify_command_risk("python --version") is None
 
 
 def test_bash_tool_description_mentions_windows_cmd(monkeypatch) -> None:

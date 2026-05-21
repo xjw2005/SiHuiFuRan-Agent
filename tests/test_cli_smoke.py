@@ -21,3 +21,12 @@ def test_cli_accepts_max_attempts_option_without_task() -> None:
 
     assert result.exit_code == 0
     assert "mokioclaw" in result.output
+
+
+def test_cli_accepts_approval_mode_option_without_task() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["--approval-mode", "deny"])
+
+    assert result.exit_code == 0
+    assert "mokioclaw" in result.output

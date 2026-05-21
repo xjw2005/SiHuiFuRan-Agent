@@ -33,3 +33,12 @@ def test_create_runtime_respects_explicit_workspace(tmp_path: Path) -> None:
 
     assert runtime.workspace == explicit
     assert explicit.exists()
+
+
+def test_create_runtime_sets_approval_configuration(tmp_path: Path) -> None:
+    handler = lambda request: True
+
+    runtime = create_runtime(tmp_path / "workspace", approval_mode="deny", approval_handler=handler)
+
+    assert runtime.approval_mode == "deny"
+    assert runtime.approval_handler is handler
