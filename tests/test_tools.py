@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from mokioclaw.core.approval import ApprovalDecision, classify_command_risk
 from mokioclaw.core.state import RuntimeState
@@ -130,6 +131,36 @@ def test_bash_accepts_string_timeout(tmp_path: Path) -> None:
     assert result["ok"] is True
 
 
+def test_bash_uses_runtime_default_timeout_when_omitted(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = b"ok\n"
+        stderr = b""
+
+    def fake_run(command, **kwargs):
+        calls.append(kwargs)
+        return FakeCompleted()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    state = RuntimeState(workspace=tmp_path, bash_default_timeout_seconds=77)
+
+    result = run_bash(state, "echo ok")
+
+    assert result["ok"] is True
+    assert calls[0]["timeout"] == 77
+
+
+def test_bash_rejects_timeout_above_runtime_max(tmp_path: Path) -> None:
+    state = RuntimeState(workspace=tmp_path, bash_max_timeout_seconds=3)
+
+    result = run_bash(state, "python --version", timeout_seconds=5)
+
+    assert result["ok"] is False
+    assert "between 1 and 3" in result["error"]
+
+
 def test_bash_sets_utf8_for_python_subprocess(tmp_path: Path) -> None:
     state = make_state(tmp_path)
     (tmp_path / "emoji.py").write_text("print('🎮')\n", encoding="utf-8")
@@ -138,6 +169,61 @@ def test_bash_sets_utf8_for_python_subprocess(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert "🎮" in result["stdout"]
+
+
+def test_bash_loads_workspace_env_file(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    (tmp_path / ".mokioclaw.env").write_text("MOKIO_TEST_VALUE=from-env\n", encoding="utf-8")
+
+    result = run_bash(
+        state,
+        "python -c \"import os; print(os.environ['MOKIO_TEST_VALUE'])\"",
+        timeout_seconds=5,
+    )
+
+    assert result["ok"] is True
+    assert "from-env" in result["stdout"]
+
+
+def test_bash_prefers_runtime_python_on_path(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(
+        state,
+        "python -c \"import sys; print(sys.executable)\"",
+        timeout_seconds=5,
+    )
+
+    assert result["ok"] is True
+    assert Path(result["stdout"].strip()) == Path(sys.executable)
+
+
+def test_bash_pip_shim_uses_runtime_python(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(
+        state,
+        "pip --version",
+        timeout_seconds=5,
+    )
+
+    assert result["ok"] is True
+    assert str(Path(sys.prefix)) in result["stdout"]
+
+
+def test_bash_env_file_expands_existing_variables(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "hello"
+    script.write_text("#!/bin/sh\necho from-custom-path\n", encoding="utf-8")
+    script.chmod(0o755)
+    (tmp_path / ".mokioclaw.env").write_text(f"PATH={bin_dir}:$PATH\n", encoding="utf-8")
+
+    result = run_bash(state, "hello", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert "from-custom-path" in result["stdout"]
 
 
 def test_bash_supports_tail_file_on_windows_style_usage(tmp_path: Path) -> None:
@@ -167,6 +253,28 @@ def test_bash_allows_dev_null_stderr_redirect(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert "File not found" in result["stdout"]
+
+
+def test_bash_writes_long_output_to_workspace_log(tmp_path: Path) -> None:
+    state = RuntimeState(workspace=tmp_path, bash_max_output_chars=10)
+
+    result = run_bash(state, "python -c \"print('x' * 50)\"", timeout_seconds=5)
+
+    assert result["ok"] is True
+    assert result["stdout_truncated"] is True
+    assert len(result["stdout"]) == 10
+    assert (tmp_path / result["stdout_path"]).exists()
+
+
+def test_bash_can_start_background_process(tmp_path: Path) -> None:
+    state = make_state(tmp_path)
+
+    result = run_bash(state, "python -c \"print('background')\"", timeout_seconds=5, run_in_background=True)
+
+    assert result["ok"] is True
+    assert result["background"] is True
+    assert result["pid"] > 0
+    assert (tmp_path / result["stdout_path"]).exists()
 
 
 def test_bash_blocks_stdout_redirect_to_absolute_path(tmp_path: Path) -> None:

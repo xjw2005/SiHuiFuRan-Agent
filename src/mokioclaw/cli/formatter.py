@@ -281,6 +281,8 @@ def _format_tool_result(result: Any) -> str:
         "exit_code",
         "timed_out",
         "duration_ms",
+        "background",
+        "pid",
         "requires_approval",
         "approved",
         "approval_id",
@@ -292,6 +294,9 @@ def _format_tool_result(result: Any) -> str:
         lines.append("stdout:\n" + _shorten(result["stdout"], 500))
     if "stderr" in result and result["stderr"]:
         lines.append("stderr:\n" + _shorten(result["stderr"], 500))
+    for path_key in ("stdout_path", "stderr_path"):
+        if result.get(path_key):
+            lines.append(f"{path_key}: {result[path_key]}")
     if "todos" in result:
         lines.append(f"todos: {len(result['todos'])} item(s)")
     if "heading" in result:

@@ -20,6 +20,10 @@ class RuntimeState:
     read_files: dict[Path, FileSnapshot] = field(default_factory=dict)
     approval_mode: str = "inline"
     approval_handler: Callable[[ApprovalRequest], ApprovalDecision | bool] | None = None
+    bash_default_timeout_seconds: int = 120
+    bash_max_timeout_seconds: int = 600
+    bash_max_output_chars: int = 6000
+    bash_env_file: Path | None = None
 
     def __post_init__(self) -> None:
         self.approval_mode = normalize_approval_mode(self.approval_mode)

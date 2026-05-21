@@ -36,7 +36,9 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
         ),
         StructuredTool.from_function(
             name="BashTool",
-            func=lambda command, timeout_seconds=10: run_bash(state, command, timeout_seconds),
+            func=lambda command, timeout_seconds=None, run_in_background=False: run_bash(
+                state, command, timeout_seconds, run_in_background
+            ),
             description=bash_tool_description(),
         ),
         StructuredTool.from_function(
@@ -68,7 +70,9 @@ def build_read_only_tools(state: RuntimeState) -> list[StructuredTool]:
         ),
         StructuredTool.from_function(
             name="BashTool",
-            func=lambda command, timeout_seconds=10: run_bash(state, command, timeout_seconds),
+            func=lambda command, timeout_seconds=None, run_in_background=False: run_bash(
+                state, command, timeout_seconds, run_in_background
+            ),
             description=bash_tool_description(),
         ),
         StructuredTool.from_function(

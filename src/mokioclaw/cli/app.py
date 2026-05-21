@@ -70,5 +70,6 @@ def _inline_approval_handler(request: ApprovalRequest) -> ApprovalDecision:
         )
     )
     answer = typer.prompt("Approve? [y/N]", default="n", show_default=False).strip().lower()
+    console.print()
     approved = answer in {"y", "yes"}
     return ApprovalDecision(approved=approved, reason="" if approved else "Rejected by human operator.")

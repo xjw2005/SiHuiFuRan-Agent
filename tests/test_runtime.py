@@ -42,3 +42,18 @@ def test_create_runtime_sets_approval_configuration(tmp_path: Path) -> None:
 
     assert runtime.approval_mode == "deny"
     assert runtime.approval_handler is handler
+
+
+def test_create_runtime_reads_bash_harness_env(monkeypatch, tmp_path: Path) -> None:
+    env_file = tmp_path / "agent.env"
+    monkeypatch.setenv("MOKIO_BASH_DEFAULT_TIMEOUT_SECONDS", "45")
+    monkeypatch.setenv("MOKIO_BASH_MAX_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("MOKIO_BASH_MAX_OUTPUT_CHARS", "1234")
+    monkeypatch.setenv("MOKIO_BASH_ENV_FILE", str(env_file))
+
+    runtime = create_runtime(tmp_path / "workspace")
+
+    assert runtime.bash_default_timeout_seconds == 45
+    assert runtime.bash_max_timeout_seconds == 300
+    assert runtime.bash_max_output_chars == 1234
+    assert runtime.bash_env_file == env_file
