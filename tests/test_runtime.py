@@ -57,3 +57,44 @@ def test_create_runtime_reads_bash_harness_env(monkeypatch, tmp_path: Path) -> N
     assert runtime.bash_max_timeout_seconds == 300
     assert runtime.bash_max_output_chars == 1234
     assert runtime.bash_env_file == env_file
+
+
+def test_create_runtime_sets_checkpoint_configuration(tmp_path: Path) -> None:
+    resume = tmp_path / "workspace"
+
+    runtime = create_runtime(resume, checkpoint_mode="strict", resume_from=resume)
+
+    assert runtime.checkpoint_mode == "strict"
+    assert runtime.resume_from == resume
+
+
+def test_create_runtime_reads_checkpoint_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MOKIO_CHECKPOINT_MODE", "deny-this-invalid-mode")
+
+    runtime = create_runtime(tmp_path / "workspace", checkpoint_mode=None)
+
+    assert runtime.checkpoint_mode == "light"
+
+
+def test_stream_agent_events_saves_checkpoint_on_keyboard_interrupt(monkeypatch, tmp_path: Path) -> None:
+    from mokioclaw.core.agent import stream_agent_events
+
+    class FakeWorkflow:
+        def stream(self, inputs, stream_mode):
+            yield ("updates", {"planner": {"plan_summary": "plan", "messages": []}})
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("mokioclaw.core.agent.build_workflow", lambda: FakeWorkflow())
+
+    events = list(
+        stream_agent_events(
+            "demo task",
+            workspace=tmp_path,
+            checkpoint_mode="light",
+            approval_mode="deny",
+        )
+    )
+
+    assert any(event.get("type") == "custom_event" and event["event"].get("type") == "checkpoint_saved" for event in events)
+    assert (tmp_path / ".mokioclaw" / "checkpoints" / "RECOVERY.md").exists()
+    assert "plan" in (tmp_path / ".mokioclaw" / "checkpoints" / "RECOVERY.md").read_text(encoding="utf-8")

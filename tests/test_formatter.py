@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from mokioclaw.cli.formatter import (
+    render_checkpoint_resumed,
+    render_checkpoint_saved,
     render_context_compression,
     render_context_monitor,
     render_memory_snapshot,
@@ -157,3 +159,53 @@ def test_print_custom_event_handles_memory_snapshot(capsys) -> None:
     output = capsys.readouterr().out
     assert "Memory Snapshot" in output
     assert "verifier" in output
+
+
+def test_render_checkpoint_saved(capsys) -> None:
+    render_checkpoint_saved(
+        {
+            "mode": "light",
+            "status": "interrupted",
+            "path": ".mokioclaw/checkpoints",
+            "checkpoint_file": "checkpoint.json",
+            "recovery_file": "RECOVERY.md",
+            "git_commit": "abc123",
+            "resume_command": "uv run mokioclaw --resume ws",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Checkpoint Saved" in output
+    assert "uv run mokioclaw --resume ws" in output
+
+
+def test_render_checkpoint_resumed(capsys) -> None:
+    render_checkpoint_resumed(
+        {
+            "mode": "strict",
+            "workspace": "ws",
+            "source": "state.json",
+            "fallback": False,
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Checkpoint Resumed" in output
+    assert "strict" in output
+
+
+def test_print_custom_event_handles_checkpoint_saved(capsys) -> None:
+    from mokioclaw.cli.formatter import print_custom_event
+
+    print_custom_event(
+        {
+            "type": "checkpoint_saved",
+            "mode": "light",
+            "status": "finished",
+            "path": ".mokioclaw/checkpoints",
+            "resume_command": "uv run mokioclaw --resume ws",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Checkpoint Saved" in output

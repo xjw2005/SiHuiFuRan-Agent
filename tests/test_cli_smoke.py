@@ -30,3 +30,28 @@ def test_cli_accepts_approval_mode_option_without_task() -> None:
 
     assert result.exit_code == 0
     assert "mokioclaw" in result.output
+
+
+def test_cli_accepts_checkpoint_mode_option_without_task() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["--checkpoint-mode", "strict"])
+
+    assert result.exit_code == 0
+    assert "mokioclaw" in result.output
+
+
+def test_cli_accepts_resume_option_without_task(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    calls = []
+
+    def fake_stream(*args, **kwargs):
+        calls.append((args, kwargs))
+        yield {"type": "workspace", "path": str(tmp_path)}
+
+    monkeypatch.setattr("mokioclaw.cli.app.stream_agent_events", fake_stream)
+    result = runner.invoke(app, ["--resume", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert calls
+    assert calls[0][1]["resume_workspace"] == tmp_path
