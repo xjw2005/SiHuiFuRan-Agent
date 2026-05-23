@@ -11,6 +11,7 @@ from mokioclaw.core.checkpoint import (
     CheckpointManager,
     build_light_resume_inputs,
     load_resume_inputs,
+    normalize_resume_task,
     serialize_state,
     deserialize_state,
     workspace_manifest,
@@ -119,6 +120,26 @@ def test_light_resume_context_includes_workspace_memory(tmp_path: Path) -> None:
     assert "History summary" in inputs["context_summary"]
     assert inputs["plan_summary"] == "demo plan"
     assert inputs["max_attempts"] == 5
+
+
+def test_light_resume_normalizes_repeated_resume_prefix(tmp_path: Path) -> None:
+    runtime = RuntimeState(workspace=tmp_path, checkpoint_mode="light")
+    repeated = (
+        "Continue this MokioClaw task from the checkpoint: "
+        "Continue the interrupted MokioClaw task from the checkpoint: "
+        "original task"
+    )
+    CheckpointManager(runtime, task=repeated).save({**sample_state(runtime), "task": repeated}, status="interrupted", latest_node="planner")
+
+    inputs = build_light_resume_inputs(runtime)
+
+    assert inputs["task"] == "Continue this MokioClaw task from the checkpoint: original task"
+
+
+def test_normalize_resume_task_strips_nested_prefixes() -> None:
+    assert normalize_resume_task(
+        "Continue this MokioClaw task from the checkpoint: Continue this MokioClaw task from the checkpoint: demo"
+    ) == "demo"
 
 
 def test_strict_resume_falls_back_to_light_when_state_missing(tmp_path: Path) -> None:

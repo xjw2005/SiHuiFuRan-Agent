@@ -142,6 +142,43 @@ def test_stream_agent_events_writes_trace_summary_on_finish(monkeypatch, tmp_pat
     assert (tmp_path / ".mokioclaw" / "traces").exists()
 
 
+def test_stream_agent_events_checkpoints_only_at_safety_points(monkeypatch, tmp_path: Path) -> None:
+    from mokioclaw.core.agent import stream_agent_events
+
+    class FakeWorkflow:
+        def stream(self, inputs, stream_mode):
+            yield ("custom", {"type": "tool_call", "node": "codeAgent", "name": "BashTool", "args": {"command": "true"}})
+            yield ("custom", {"type": "tool_result", "node": "codeAgent", "name": "BashTool", "result": {"ok": True}})
+            yield ("updates", {"planner": {"plan_summary": "plan", "messages": []}})
+            yield (
+                "custom",
+                {
+                    "type": "tool_result",
+                    "node": "codeAgent",
+                    "name": "BashTool",
+                    "result": {"ok": False, "requires_approval": True, "approved": False},
+                },
+            )
+            yield ("updates", {"final": {"final_answer": "LangGraph MultiAgent workflow finished: PASSED"}})
+
+    monkeypatch.setattr("mokioclaw.core.agent.build_workflow", lambda: FakeWorkflow())
+
+    events = list(
+        stream_agent_events(
+            "demo task",
+            workspace=tmp_path,
+            checkpoint_mode="light",
+            trace_mode="on",
+            approval_mode="deny",
+        )
+    )
+
+    trace_events = [event["event"] for event in events if event.get("type") == "custom_event" and event["event"].get("type") == "trace_summary"]
+    assert trace_events
+    # started + planner graph update + failed/approval tool result + final graph update + finished
+    assert trace_events[-1]["checkpoint_count"] == 5
+
+
 def test_stream_agent_events_writes_trace_summary_on_keyboard_interrupt(monkeypatch, tmp_path: Path) -> None:
     from mokioclaw.core.agent import stream_agent_events
 

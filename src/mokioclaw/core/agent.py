@@ -94,9 +94,10 @@ def stream_agent_events(
         for mode, event in workflow.stream(inputs, stream_mode=["updates", "custom"]):
             if mode == "custom":
                 trace.record_custom_event(event)
-                saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
-                if saved:
-                    trace.record_custom_event(saved)
+                if _custom_event_needs_checkpoint(event):
+                    saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
+                    if saved:
+                        trace.record_custom_event(saved)
                 yield {"type": "custom_event", "event": event}
             else:
                 latest_node = _latest_graph_node(event) or latest_node
@@ -155,3 +156,14 @@ def _merge_graph_update(state: dict[str, Any], event: Any) -> None:
                 state["messages"] = list(add_messages(state.get("messages", []), value))
             else:
                 state[key] = value
+
+
+def _custom_event_needs_checkpoint(event: Any) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if event.get("type") != "tool_result":
+        return False
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return False
+    return result.get("ok") is False or bool(result.get("requires_approval"))

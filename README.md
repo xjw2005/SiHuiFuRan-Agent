@@ -157,10 +157,10 @@ uv run mokioclaw --resume .mokioclaw/workspaces/workspace-YYYYMMDD-HHMMSS-xxxxxx
 | 模式 | 行为 |
 | --- | --- |
 | `light` | 默认模式；保存 workspace 文件快照、`TODO.md`、`NOTEPAD.md`、`HISTORY_SUMMARY.md`、恢复摘要和内部 git 文件版本，恢复时让模型基于这些上下文继续任务 |
-| `strict` | 在 light 基础上保存可序列化 graph state 和事件日志；恢复时优先用 state-backed restart，若 state 不可读则自动降级 light resume |
+| `strict` | 在 light 基础上保存可序列化 graph state 和事件日志；恢复时执行 state-backed restart，若 state 不可读则自动降级 light resume |
 | `off` | 不保存 checkpoint |
 
-checkpoint 文件都位于当前 workspace 的 `.mokioclaw/checkpoints/`，内部 git repo 只用于该 workspace 文件快照，不会接管项目仓库。
+checkpoint 文件都位于当前 workspace 的 `.mokioclaw/checkpoints/`，内部 git repo 只用于该 workspace 文件快照，不会接管项目仓库。运行中会在开始、graph update、失败/审批类工具结果、中断和结束这些关键安全点刷新 checkpoint；完整事件链路由 Trace 记录。
 
 Trace 默认开启，并在每次运行结束或中断时展示 `Trace Summary`：
 
