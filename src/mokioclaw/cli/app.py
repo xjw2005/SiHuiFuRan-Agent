@@ -42,6 +42,10 @@ def main(
         Literal["light", "strict", "off"],
         typer.Option("--checkpoint-mode", help="Checkpoint mode: light, strict, or off."),
     ] = "light",
+    trace_mode: Annotated[
+        Literal["on", "off"],
+        typer.Option("--trace-mode", help="Trace logging mode: on or off."),
+    ] = "on",
     resume: Annotated[
         Path | None,
         typer.Option("--resume", help="Resume from an existing MokioClaw workspace."),
@@ -64,6 +68,7 @@ def main(
         approval_handler=approval_handler,
         checkpoint_mode=checkpoint_mode,
         resume_workspace=resume,
+        trace_mode=trace_mode,
     ):
         print_event(event)
 

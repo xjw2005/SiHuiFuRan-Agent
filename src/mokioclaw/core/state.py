@@ -6,6 +6,7 @@ from typing import Callable
 
 from mokioclaw.core.approval import ApprovalDecision, ApprovalRequest, normalize_approval_mode
 from mokioclaw.core.checkpoint import normalize_checkpoint_mode
+from mokioclaw.core.trace import normalize_trace_mode
 
 
 @dataclass(frozen=True)
@@ -27,10 +28,13 @@ class RuntimeState:
     bash_env_file: Path | None = None
     checkpoint_mode: str = "light"
     resume_from: Path | None = None
+    trace_mode: str = "on"
+    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         self.approval_mode = normalize_approval_mode(self.approval_mode)
         self.checkpoint_mode = normalize_checkpoint_mode(self.checkpoint_mode)
+        self.trace_mode = normalize_trace_mode(self.trace_mode)
 
     def record_read(self, path: Path, *, complete: bool) -> None:
         stat = path.stat()

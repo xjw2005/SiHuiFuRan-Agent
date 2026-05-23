@@ -8,6 +8,7 @@ from mokioclaw.cli.formatter import (
     render_memory_snapshot,
     render_plan,
     render_sources,
+    render_trace_summary,
     render_verifier,
 )
 
@@ -209,3 +210,49 @@ def test_print_custom_event_handles_checkpoint_saved(capsys) -> None:
 
     output = capsys.readouterr().out
     assert "Checkpoint Saved" in output
+
+
+def test_render_trace_summary(capsys) -> None:
+    render_trace_summary(
+        {
+            "trace_id": "trace-demo",
+            "status": "finished",
+            "duration_ms": 123,
+            "trace_dir": ".mokioclaw/traces/trace-demo",
+            "node_visits": {"planner": 1, "final": 1},
+            "tool_calls": 2,
+            "failed_tool_calls": 1,
+            "approval_count": 1,
+            "checkpoint_count": 3,
+            "final_status": "passed",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Trace Summary" in output
+    assert "trace-demo" in output
+    assert "planner:1" in output
+
+
+def test_print_custom_event_handles_trace_summary(capsys) -> None:
+    from mokioclaw.cli.formatter import print_custom_event
+
+    print_custom_event(
+        {
+            "type": "trace_summary",
+            "trace_id": "trace-demo",
+            "status": "interrupted",
+            "duration_ms": 10,
+            "trace_dir": ".mokioclaw/traces/trace-demo",
+            "node_visits": {},
+            "tool_calls": 0,
+            "failed_tool_calls": 0,
+            "approval_count": 0,
+            "checkpoint_count": 1,
+            "final_status": "",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Trace Summary" in output
+    assert "interrupted" in output

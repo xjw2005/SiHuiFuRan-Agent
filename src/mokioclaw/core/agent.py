@@ -10,6 +10,7 @@ from langgraph.graph import add_messages
 from mokioclaw.core.checkpoint import CheckpointManager, load_resume_inputs, normalize_checkpoint_mode
 from mokioclaw.core.paths import default_workspace
 from mokioclaw.core.state import RuntimeState
+from mokioclaw.core.trace import TraceRecorder, normalize_trace_mode
 from mokioclaw.graph.workflow import build_workflow
 
 
@@ -20,6 +21,7 @@ def create_runtime(
     approval_handler=None,
     checkpoint_mode: str | None = None,
     resume_from: Path | None = None,
+    trace_mode: str | None = None,
 ) -> RuntimeState:
     load_dotenv()
     selected = workspace or resume_from or default_workspace()
@@ -34,6 +36,7 @@ def create_runtime(
         bash_env_file=_env_path("MOKIO_BASH_ENV_FILE"),
         checkpoint_mode=normalize_checkpoint_mode(checkpoint_mode or os.getenv("MOKIO_CHECKPOINT_MODE", "light")),
         resume_from=resume_from,
+        trace_mode=normalize_trace_mode(trace_mode or os.getenv("MOKIO_TRACE_MODE", "on")),
     )
 
 
@@ -46,6 +49,7 @@ def stream_agent_events(
     approval_handler=None,
     checkpoint_mode: str | None = None,
     resume_workspace: Path | None = None,
+    trace_mode: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     resume_path = resume_workspace.expanduser() if resume_workspace is not None else None
     selected_workspace = resume_path or workspace
@@ -55,12 +59,16 @@ def stream_agent_events(
         approval_handler=approval_handler,
         checkpoint_mode=checkpoint_mode,
         resume_from=resume_path,
+        trace_mode=trace_mode,
     )
     workflow = build_workflow()
     yield {"type": "workspace", "path": str(state.workspace)}
 
+    resumed = False
+    resume_event: dict[str, Any] | None = None
     if resume_path is not None:
         inputs, resume_event = load_resume_inputs(state, task=task, max_attempts=max_attempts)
+        resumed = True
         yield {"type": "custom_event", "event": resume_event}
     else:
         inputs = {
@@ -73,28 +81,48 @@ def stream_agent_events(
 
     current_state: dict[str, Any] = dict(inputs)
     manager = CheckpointManager(state, task=str(current_state.get("task", "")))
-    manager.save(current_state, status="started", latest_node="start")
+    trace = TraceRecorder(state, task=str(current_state.get("task", "")))
+    trace.start(current_state, resumed=resumed, resume_event=resume_event)
+    if resume_event is not None:
+        trace.record_custom_event(resume_event)
+    started_checkpoint = manager.save(current_state, status="started", latest_node="start")
+    if started_checkpoint:
+        trace.record_custom_event(started_checkpoint)
     latest_node = "start"
 
     try:
         for mode, event in workflow.stream(inputs, stream_mode=["updates", "custom"]):
             if mode == "custom":
-                manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
+                trace.record_custom_event(event)
+                saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
+                if saved:
+                    trace.record_custom_event(saved)
                 yield {"type": "custom_event", "event": event}
             else:
                 latest_node = _latest_graph_node(event) or latest_node
                 _merge_graph_update(current_state, event)
-                manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
+                trace.record_graph_update(event)
+                saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
+                if saved:
+                    trace.record_custom_event(saved)
                 yield {"type": "graph_event", "event": event}
     except KeyboardInterrupt:
         saved = manager.save(current_state, status="interrupted", latest_node=latest_node)
         if saved:
+            trace.record_custom_event(saved)
             yield {"type": "custom_event", "event": saved}
+        trace_event = trace.end(status="interrupted", latest_node=latest_node, final_state=current_state)
+        if trace_event:
+            yield {"type": "custom_event", "event": trace_event}
         return
 
     saved = manager.save(current_state, status="finished", latest_node=latest_node)
     if saved:
+        trace.record_custom_event(saved)
         yield {"type": "custom_event", "event": saved}
+    trace_event = trace.end(status="finished", latest_node=latest_node, final_state=current_state)
+    if trace_event:
+        yield {"type": "custom_event", "event": trace_event}
 
 
 def _env_int(name: str, default: int) -> int:
