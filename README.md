@@ -201,6 +201,8 @@ TUI 复用同一套 `stream_agent_events()`，不会改变 Agent 的 planner、s
 - 默认每一轮任务都会创建新的 workspace，避免多轮任务互相污染。
 - 高风险 BashTool 命令会在 TUI 内弹出审批对话框，支持 `y` / Enter 批准，`n` / Esc 拒绝。
 
+为了避免“你好”这类输入也启动完整复杂流程，LangGraph 前面增加了一个模型路由节点 `intent_router`。它会先判断本轮输入应该走轻量 `chat_responder`，还是进入 planner / codeAgent / verifier 复杂工作流。寒暄、感谢、帮助说明和普通概念问答会直接通过 `chat_response` 回复，不创建 workspace，不进入 planner，也不会写 checkpoint/trace。需要创建/修改文件、运行命令、搜索资料、验证结果或检查项目时，才进入完整 MultiAgent 工作流。
+
 TUI 子命令支持和普通 CLI 相同的运行选项：
 
 ```bash

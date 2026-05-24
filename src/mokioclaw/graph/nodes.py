@@ -53,6 +53,94 @@ DEFAULT_TODOS = [
     "Verify the generated result.",
 ]
 
+INTENT_ROUTER_PROMPT = """You are the intent router for MokioClaw.
+
+Classify the user's latest input into exactly one route:
+
+- chat: greetings, thanks, identity/help questions, ordinary conceptual Q&A, or conversational messages that do not need workspace access.
+- workflow: any request that needs creating/editing/reading files, running commands, installing packages, searching the web, checking the current project, verifying a result, or producing a concrete deliverable.
+
+Return only JSON with this shape:
+{"route":"chat"|"workflow","reason":"brief reason","confidence":0.0}
+
+If uncertain, choose workflow.
+"""
+
+CHAT_RESPONDER_PROMPT = """You are MokioClaw's lightweight chat node.
+
+Answer the user directly and concisely. Do not claim that you read files,
+searched the web, ran commands, edited files, or inspected the workspace.
+If the user asks for work requiring tools or project context, say that it
+should be handled by the workflow route.
+"""
+
+
+def intent_router_node(state: MokioGraphState) -> dict[str, Any]:
+    writer = _get_writer()
+    route = "workflow"
+    reason = "router fallback: default to workflow"
+    confidence = 0.0
+    try:
+        response = create_model().invoke(
+            [
+                SystemMessage(content=INTENT_ROUTER_PROMPT),
+                HumanMessage(content=f"User input:\n{state.get('task', '')}"),
+            ]
+        )
+        parsed = _extract_json(str(response.content)) or {}
+        candidate = str(parsed.get("route", "")).strip().lower()
+        parsed_confidence = _coerce_confidence(parsed.get("confidence"))
+        if candidate in {"chat", "workflow"} and parsed_confidence >= 0.55:
+            route = candidate
+            confidence = parsed_confidence
+            reason = str(parsed.get("reason") or "")
+        else:
+            reason = str(parsed.get("reason") or "router returned low-confidence or invalid route")
+            confidence = parsed_confidence
+    except Exception as exc:
+        reason = f"router error: {type(exc).__name__}: {exc}"
+
+    event = {
+        "type": "intent_decision",
+        "route": route,
+        "reason": reason,
+        "confidence": confidence,
+    }
+    writer(event)
+    return {
+        "intent_route": route,
+        "intent_reason": reason,
+        "intent_confidence": confidence,
+    }
+
+
+def intent_route_fn(state: MokioGraphState) -> str:
+    return "chat_responder" if state.get("intent_route") == "chat" else "planner"
+
+
+def chat_responder_node(state: MokioGraphState) -> dict[str, Any]:
+    writer = _get_writer()
+    try:
+        response = create_model().invoke(
+            [
+                SystemMessage(content=CHAT_RESPONDER_PROMPT),
+                HumanMessage(content=str(state.get("task", ""))),
+            ]
+        )
+        text = str(getattr(response, "content", "") or "").strip()
+    except Exception as exc:
+        text = f"这是轻量聊天分支，但模型回复暂不可用：{type(exc).__name__}: {exc}"
+    if not text:
+        text = "我在。你可以继续提问，或者直接描述一个需要我完成的任务。"
+    event = {
+        "type": "chat_response",
+        "mode": "lightweight",
+        "reason": state.get("intent_reason", ""),
+        "response": text,
+    }
+    writer(event)
+    return {"chat_response": text, "final_answer": text}
+
 
 def planner_node(state: MokioGraphState) -> dict[str, Any]:
     writer = _get_writer()
@@ -693,6 +781,14 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _coerce_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, confidence))
 
 
 def _tool_result_event(tool_message: ToolMessage, *, node: str) -> dict[str, Any]:

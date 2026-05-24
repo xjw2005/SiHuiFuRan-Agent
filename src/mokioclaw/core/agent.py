@@ -11,7 +11,7 @@ from mokioclaw.core.checkpoint import CheckpointManager, load_resume_inputs, nor
 from mokioclaw.core.paths import default_workspace
 from mokioclaw.core.state import RuntimeState
 from mokioclaw.core.trace import TraceRecorder, normalize_trace_mode
-from mokioclaw.graph.workflow import build_workflow
+from mokioclaw.graph.workflow import build_complex_workflow, build_entry_workflow
 
 
 def create_runtime(
@@ -52,6 +52,20 @@ def stream_agent_events(
     trace_mode: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     resume_path = resume_workspace.expanduser() if resume_workspace is not None else None
+    if resume_path is None:
+        route = "workflow"
+        entry_state: dict[str, Any] = {"task": task or "", "messages": []}
+        for mode, event in build_entry_workflow().stream(entry_state, stream_mode=["updates", "custom"]):
+            if mode == "custom":
+                yield {"type": "custom_event", "event": event}
+                if isinstance(event, dict) and event.get("type") == "intent_decision":
+                    route = str(event.get("route") or "workflow")
+            else:
+                _merge_graph_update(entry_state, event)
+                yield {"type": "graph_event", "event": event}
+        if route == "chat":
+            return
+
     selected_workspace = resume_path or workspace
     state = create_runtime(
         selected_workspace,
@@ -61,7 +75,7 @@ def stream_agent_events(
         resume_from=resume_path,
         trace_mode=trace_mode,
     )
-    workflow = build_workflow()
+    workflow = build_complex_workflow()
     yield {"type": "workspace", "path": str(state.workspace)}
 
     resumed = False

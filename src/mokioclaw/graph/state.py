@@ -70,6 +70,10 @@ class MokioGraphState(TypedDict, total=False):
     attempts: int
     max_attempts: int
     final_answer: str
+    intent_route: str
+    intent_reason: str
+    intent_confidence: float
+    chat_response: str
     last_actor_summary: str
     research_notes: str
     sources: list[SourceItem]

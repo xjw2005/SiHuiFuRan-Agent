@@ -113,6 +113,29 @@ def test_tui_renders_fake_stream_events(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_tui_renders_lightweight_chat_response() -> None:
+    def fake_stream(*args, **kwargs):
+        yield {
+            "type": "custom_event",
+            "event": {
+                "type": "chat_response",
+                "mode": "lightweight",
+                "reason": "greeting",
+                "response": "你好，我在。",
+            },
+        }
+
+    async def run() -> None:
+        app = MokioClawTuiApp(initial_task="你好", stream_factory=fake_stream)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            assert app.run_count == 1
+            assert not app.latest_workspace
+            assert not app.running
+
+    asyncio.run(run())
+
+
 def test_tui_input_bar_stays_visible() -> None:
     async def run() -> None:
         app = MokioClawTuiApp(stream_factory=lambda *args, **kwargs: [])

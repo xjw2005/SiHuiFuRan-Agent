@@ -5,6 +5,8 @@ from mokioclaw.cli.formatter import (
     render_checkpoint_saved,
     render_context_compression,
     render_context_monitor,
+    render_chat_response,
+    render_intent_decision,
     render_memory_snapshot,
     render_plan,
     render_sources,
@@ -72,6 +74,37 @@ def test_render_context_monitor(capsys) -> None:
     output = capsys.readouterr().out
     assert "120" in output
     assert "verifier" in output
+
+
+def test_render_chat_response(capsys) -> None:
+    render_chat_response(
+        {
+            "type": "chat_response",
+            "mode": "lightweight",
+            "reason": "greeting",
+            "response": "你好，我在。",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "MokioClaw" in output
+    assert "你好" in output
+
+
+def test_render_intent_decision(capsys) -> None:
+    render_intent_decision(
+        {
+            "type": "intent_decision",
+            "route": "chat",
+            "reason": "greeting",
+            "confidence": 0.91,
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "Intent Router" in output
+    assert "chat" in output
+    assert "0.91" in output
 
 
 def test_render_context_compression(capsys) -> None:
