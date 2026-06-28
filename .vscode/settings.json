@@ -1,0 +1,14 @@
+{
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "warning",
+        "reportMissingModuleSource": "none",
+        "reportArgumentType": "none",
+        "reportOptionalMemberAccess": "none",
+        "reportGeneralTypeIssues": "warning",
+        "reportAttributeAccessIssue": "none",
+        "reportUnknownParameterType": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownMemberType": "none"
+    }
+}
