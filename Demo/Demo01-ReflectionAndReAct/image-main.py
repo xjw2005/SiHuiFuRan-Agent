@@ -84,13 +84,13 @@ def reflect_node(state: ReflectionState) -> dict:
     # 解析反思结果
     is_satisfactory = "SATISFACTORY: yes" in response.content.lower()
 
-    # 更新状态
-    if state["iteration"] >= state["max_iterations"]:
-        state["arrival_max_iterations"] = True
- 
+    # 检查是否达到最大迭代次数（通过返回 dict 更新 state，而不是直接 mutation）
+    arrival_max = state["iteration"] >= state["max_iterations"]
+
     return {
         "messages": [response],
         "is_satisfactory": is_satisfactory,
+        "arrival_max_iterations": arrival_max,
     }
 
 

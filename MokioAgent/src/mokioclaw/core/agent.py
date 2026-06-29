@@ -50,33 +50,53 @@ def create_runtime(
     )
 
 
+# stream_agent_events：Agent 的核心调度引擎
+# 这是一个生成器函数，会"做一步，吐一步"地流式输出 Agent 的执行过程
+# 返回值类型 Iterator[dict[str, Any]] 表示这是一个迭代器，每次产出一个字典类型的 event
 def stream_agent_events(
-    task: str | None = None,
-    *,
-    workspace: Path | None = None,
-    max_attempts: int = 3,
-    approval_mode: str = "inline",
-    approval_handler=None,
-    checkpoint_mode: str | None = None,
-    resume_workspace: Path | None = None,
-    trace_mode: str | None = None,
+    task: str | None = None,  # 用户的任务描述，比如"帮我创建一个Flask项目"
+    *,                        # * 号表示后面的参数必须用关键字参数传，不能 positional
+    workspace: Path | None = None,  # 工作目录路径，生成的文件会放这里
+    max_attempts: int = 3,    # 最大尝试次数，planner/verifier 循环最多跑几轮
+    approval_mode: str = "inline",  # 危险命令的审批模式：inline / auto / deny
+    approval_handler=None,     # 审批回调函数，inline 模式下会弹出终端问用户 Y/N
+    checkpoint_mode: str | None = None,  # 断点保存模式：light / strict / off
+    resume_workspace: Path | None = None,  # 断点恢复路径，从哪个目录接着跑
+    trace_mode: str | None = None,  # 追踪日志开关：on / off
 ) -> Iterator[dict[str, Any]]:
+    # 处理恢复路径：expanduser() 把 ~ 展开成用户目录
     resume_path = resume_workspace.expanduser() if resume_workspace is not None else None
+
+    # 如果不是断点恢复（也就是新任务），先跑 entry_workflow 做意图判断
     if resume_path is None:
+        # 默认走 workflow 分支
         route = "workflow"
+        # 初始化入口工作流的 state
         entry_state: dict[str, Any] = {"task": task or "", "messages": []}
+
+        # 流式跑 entry_workflow（intent_router → chat_responder / planner）
         for mode, event in build_entry_workflow().stream(entry_state, stream_mode=["updates", "custom"]):
             if mode == "custom":
+                # custom 类型的事件直接转发出去（比如 intent_router 的决策结果）
                 yield {"type": "custom_event", "event": event}
+                # 如果收到了 intent_decision 事件，把 route 存下来（chat 或 workflow）
                 if isinstance(event, dict) and event.get("type") == "intent_decision":
                     route = str(event.get("route") or "workflow")
             else:
+                # updates 类型的事件：更新 state，然后转发
                 _merge_graph_update(entry_state, event)
                 yield {"type": "graph_event", "event": event}
+
+        # 如果判断是 chat（闲聊/概念问题），直接结束，不跑复杂工作流
         if route == "chat":
             return
 
+    # ========== 下面开始跑 complex_workflow ==========
+
+    # 确定工作目录：优先用恢复路径，其次用用户指定的 workspace
     selected_workspace = resume_path or workspace
+
+    # 创建 runtime 对象：统一管理工作目录、审批配置、断点配置等
     state = create_runtime(
         selected_workspace,
         approval_mode=approval_mode,
@@ -85,66 +105,105 @@ def stream_agent_events(
         resume_from=resume_path,
         trace_mode=trace_mode,
     )
+
+    # 构建复杂工作流的图对象
     workflow = build_complex_workflow()
+
+    # 先输出一个 workspace 事件，告诉用户工作目录在哪
     yield {"type": "workspace", "path": str(state.workspace)}
 
+    # resumed 标记：是否是从断点恢复的
     resumed = False
+    # resume_event：恢复事件的详情
     resume_event: dict[str, Any] | None = None
+
+    # 如果是断点恢复模式
     if resume_path is not None:
+        # 从 checkpoint 加载恢复所需的 inputs
         inputs, resume_event = load_resume_inputs(state, task=task, max_attempts=max_attempts)
         resumed = True
+        # 输出恢复事件，告诉用户"从之前的断点续跑了"
         yield {"type": "custom_event", "event": resume_event}
     else:
+        # 全新任务：初始化 inputs
         inputs = {
-            "task": task or "",
-            "runtime": state,
-            "messages": [],
-            "attempts": 0,
-            "max_attempts": max_attempts,
+            "task": task or "",      # 任务描述
+            "runtime": state,        # runtime 对象
+            "messages": [],          # 消息列表（LLM 的对话历史）
+            "attempts": 0,           # 当前尝试次数
+            "max_attempts": max_attempts,  # 最大尝试次数
         }
 
+    # 复制一份 inputs 作为 current_state，用来追踪每一步的状态更新
     current_state: dict[str, Any] = dict(inputs)
+
+    # 创建 CheckpointManager：负责保存断点
     manager = CheckpointManager(state, task=str(current_state.get("task", "")))
+
+    # 创建 TraceRecorder：负责记录执行追踪日志
     trace = TraceRecorder(state, task=str(current_state.get("task", "")))
+
+    # 开始追踪
     trace.start(current_state, resumed=resumed, resume_event=resume_event)
+
+    # 如果有恢复事件，也记录到 trace 里
     if resume_event is not None:
         trace.record_custom_event(resume_event)
+
+    # 保存第一个 checkpoint：状态为 started
     started_checkpoint = manager.save(current_state, status="started", latest_node="start")
     if started_checkpoint:
         trace.record_custom_event(started_checkpoint)
+
+    # 记录当前跑到哪个节点了，初始是 start
     latest_node = "start"
 
+    # ========== 核心主循环：流式跑 complex_workflow ==========
     try:
+        # 流式迭代工作流的每一步
         for mode, event in workflow.stream(inputs, stream_mode=["updates", "custom"]):
             if mode == "custom":
-                trace.record_custom_event(event)
+                # custom 事件：工具调用、hand off 等非节点更新事件
+                trace.record_custom_event(event)  # 记录到 trace
+                # 判断这个事件是否需要触发 checkpoint（比如工具出错、需要审批）
                 if _custom_event_needs_checkpoint(event):
                     saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
                     if saved:
                         trace.record_custom_event(saved)
+                # 输出事件给终端显示
                 yield {"type": "custom_event", "event": event}
             else:
-                latest_node = _latest_graph_node(event) or latest_node
-                _merge_graph_update(current_state, event)
-                trace.record_graph_update(event)
+                # updates 事件：节点执行完成，state 更新了
+                latest_node = _latest_graph_node(event) or latest_node  # 更新当前节点名
+                _merge_graph_update(current_state, event)  # 合并 state 更新
+                trace.record_graph_update(event)  # 记录到 trace
+                # 保存 checkpoint
                 saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
                 if saved:
                     trace.record_custom_event(saved)
+                # 输出事件给终端显示
                 yield {"type": "graph_event", "event": event}
     except KeyboardInterrupt:
+        # 用户按了 Ctrl+C 中断
+        # 保存 interrupted 状态的 checkpoint
         saved = manager.save(current_state, status="interrupted", latest_node=latest_node)
         if saved:
             trace.record_custom_event(saved)
             yield {"type": "custom_event", "event": saved}
+        # 结束追踪，输出 trace 摘要
         trace_event = trace.end(status="interrupted", latest_node=latest_node, final_state=current_state)
         if trace_event:
             yield {"type": "custom_event", "event": trace_event}
-        return
+        return  # 中断返回
 
+    # ========== 正常跑完了，收尾 ==========
+    # 保存 finished 状态的 checkpoint
     saved = manager.save(current_state, status="finished", latest_node=latest_node)
     if saved:
         trace.record_custom_event(saved)
         yield {"type": "custom_event", "event": saved}
+
+    # 结束追踪，输出最终的 trace 摘要
     trace_event = trace.end(status="finished", latest_node=latest_node, final_state=current_state)
     if trace_event:
         yield {"type": "custom_event", "event": trace_event}
