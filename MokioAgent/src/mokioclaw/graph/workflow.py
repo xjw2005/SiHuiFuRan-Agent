@@ -34,12 +34,21 @@ def build_complex_workflow():
     graph.add_conditional_edges(
         "context_monitor",
         context_monitor_route,
-        {"context_compressor": "context_compressor", "verifier": "verifier", "planner": "planner", "final": "final"},
+        {
+            "context_compressor": "context_compressor",
+            "verifier": "verifier",
+            "planner": "planner",
+            "final": "final",
+        },
     )
     graph.add_conditional_edges(
         "context_compressor",
         context_compressor_route,
-        {"verifier": "verifier", "planner": "planner", "final": "final"},
+        {
+            "verifier": "verifier",
+            "planner": "planner",
+            "final": "final",
+        },
     )
     graph.add_edge("verifier", "context_monitor")
     graph.add_edge("final", END)

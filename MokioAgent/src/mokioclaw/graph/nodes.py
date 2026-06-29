@@ -534,11 +534,38 @@ def _todo_write_tool(
 
 
 def _call_search_agent_tool(state: MokioGraphState, writer, instruction: str) -> dict[str, Any]:
+    """
+    Planner 委派任务给 SearchAgent 的桥接函数。
+    
+    这是 Multi-Agent 架构的核心体现：planner 不亲自做搜索，
+    而是把搜索任务"委派"给 specialist agent（searchAgent），
+    搜索完成后把结果整理更新回 state。
+    
+    Args:
+        state: 当前图的状态
+        writer: 事件输出回调函数
+        instruction: 给 SearchAgent 的搜索指令，由 LLM 生成
+    
+    Returns:
+        dict: 包含 ok、搜索摘要、来源列表、查询词列表
+    """
+    # 1. 输出 handoff 事件到终端，让用户看到"planner 把任务交给谁了"
     writer({"type": "handoff", "from": "planner", "to": "searchAgent", "instruction": instruction})
+    
+    # 2. 实际调用 searchAgent 执行搜索
     result = run_search_agent(state, instruction, writer=writer)
+    
+    # 3. 保存已有来源列表，用于后续去重
     existing_sources = list(state.get("sources", []))
+    
+    # 4. 把本次搜索的摘要追加到研究笔记（research_notes）中
+    #    research_notes 是累积的，每次搜索都追加
     state["research_notes"] = _join_notes(state.get("research_notes", ""), result.get("summary", ""))
+    
+    # 5. 合并新搜索到的来源，并去重（防止同一个 URL 被多次搜到）
     state["sources"] = _dedupe_sources(existing_sources + list(result.get("sources", [])))
+    
+    # 6. 记录本次 agent 交接（handoff）到 state，用于追踪和调试
     handoff = {
         "from_agent": "planner",
         "to_agent": "searchAgent",
@@ -546,17 +573,38 @@ def _call_search_agent_tool(state: MokioGraphState, writer, instruction: str) ->
         "result": result.get("summary", ""),
     }
     state["agent_handoffs"] = list(state.get("agent_handoffs", [])) + [handoff]
+    
+    # 7. 输出交接完成事件到终端
     writer({"type": "handoff_result", "from": "searchAgent", "to": "planner", "result": result.get("summary", "")})
+    
+    # 8. 返回结果给调用方（会被包装成 ToolMessage 给 LLM 看）
     return {
         "ok": True,
-        "summary": result.get("summary", ""),
-        "sources": state.get("sources", []),
-        "queries": result.get("queries", []),
+        "summary": result.get("summary", ""),     # 搜索摘要
+        "sources": state.get("sources", []),      # 去重后的所有来源
+        "queries": result.get("queries", []),     # 实际执行的搜索查询词
     }
 
 
 def _call_code_agent_tool(state: MokioGraphState, writer, instruction: str) -> dict[str, Any]:
+    """
+    Planner 委派任务给 CodeAgent 的桥接函数。
+    
+    与 _call_search_agent_tool 对称：planner 把代码编写/文件操作任务
+    委派给 specialist agent（codeAgent），执行完成后更新 state 中的 todos。
+    
+    Args:
+        state: 当前图的状态
+        writer: 事件输出回调函数
+        instruction: 给 CodeAgent 的任务指令
+    
+    Returns:
+        dict: 包含 ok、执行摘要、更新后的 todos 列表
+    """
+    # 1. 输出 handoff 事件到终端
     writer({"type": "handoff", "from": "planner", "to": "codeAgent", "instruction": instruction})
+    
+    # 2. 实际调用 codeAgent 执行任务（读写文件、跑命令等）
     result = run_code_agent(state, instruction, writer=writer)
     state["todos"] = result.get("todos", state.get("todos", []))
     state["code_agent_summary"] = result.get("summary", "")
@@ -573,31 +621,83 @@ def _call_code_agent_tool(state: MokioGraphState, writer, instruction: str) -> d
 
 
 def _execute_planner_tool(state: MokioGraphState, writer, call: dict[str, Any]) -> ToolMessage:
-    name = call.get("name", "")
-    args = call.get("args") or {}
+    """
+    执行 planner 节点的工具调用。
+    
+    这是 planner 与外部世界交互的核心桥接函数：
+    1. 接收 LLM 产出的 tool call 指令
+    2. 查找并调用对应的工具
+    3. 将工具执行结果包装成 LangChain 的 ToolMessage 返回
+    
+    Args:
+        state: 当前图的状态
+        writer: 事件输出回调函数，用于向终端打印执行过程
+        call: LLM 产出的工具调用字典，格式为 {"name": "工具名", "args": {...}, "id": "..."}
+    
+    Returns:
+        ToolMessage: 包装后的工具执行结果，会被加回 messages 列表供下一轮 LLM 参考
+    """
+    # 1. 从 tool call 对象中提取工具名和参数
+    name = call.get("name", "")       # 工具名，如 "CallCodeAgentTool"
+    args = call.get("args") or {}     # 工具参数字典
+    
+    # 2. 输出工具调用事件到终端，让用户看到在干什么
     writer({"type": "tool_call", "node": "planner", "name": name, "args": args})
+    
+    # 3. 构建 planner 可用的所有工具，转成 {name: tool} 字典方便查找
+    #    这里每次都重新构建是为了确保 state 和 writer 是最新的
     tools = {tool.name: tool for tool in _build_planner_tools(state, writer)}
+    
+    # 4. 按名称查找工具
     tool = tools.get(name)
     if tool is None:
+        # 找不到工具，返回错误信息
         result = {"ok": False, "error": f"unknown tool: {name}"}
     else:
         try:
+            # ⭐ 核心：调用 StructuredTool 的 .invoke() 方法执行工具
             result = tool.invoke(args)
         except Exception as exc:
+            # 捕获所有异常，转换成标准化的错误结果，避免整个图崩溃
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    
+    # 5. 将执行结果包装成 LangChain 的 ToolMessage 对象
+    #    这个消息会被加回 messages 列表，下一轮 LLM 就能看到工具执行结果了
     tool_message = ToolMessage(
-        content=json.dumps(result, ensure_ascii=False),
-        name=name,
-        tool_call_id=call.get("id") or f"{name}-call",
+        content=json.dumps(result, ensure_ascii=False),  # 结果转成 JSON 字符串
+        name=name,                                       # 工具名
+        tool_call_id=call.get("id") or f"{name}-call",   # 关联的 tool call ID（用于 LLM 追踪）
     )
+    
+    # 6. 输出工具执行结果事件到终端
     writer(_tool_result_event(tool_message, node="planner"))
+    
+    # 7. 返回 ToolMessage，会被追加到 state["messages"] 中
     return tool_message
 
 
 def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any]) -> ToolMessage:
+    """
+    执行只读工具调用（verifier 节点专用）。
+    
+    与 _execute_planner_tool 逻辑类似，但只使用只读工具集，
+    防止 verifier 意外修改文件或执行命令。
+    
+    Args:
+        state: 当前图的状态
+        call: LLM 产出的工具调用字典
+    
+    Returns:
+        ToolMessage: 包装后的工具执行结果
+    """
+    # 1. 提取工具名和参数
     name = call.get("name", "")
     args = call.get("args") or {}
+    
+    # 2. 构建只读工具集（只有读文件、读目录等，不能写文件、不能跑命令）
     tools = {tool.name: tool for tool in build_read_only_tools(state["runtime"])}
+    
+    # 3. 查找并执行工具
     tool = tools.get(name)
     if tool is None:
         result = {"ok": False, "error": f"unknown tool: {name}"}
@@ -606,6 +706,8 @@ def _execute_read_only_tool(state: MokioGraphState, call: dict[str, Any]) -> Too
             result = tool.invoke(args)
         except Exception as exc:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    
+    # 4. 包装成 ToolMessage 返回
     return ToolMessage(
         content=json.dumps(result, ensure_ascii=False),
         name=name,
